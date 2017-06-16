@@ -14,8 +14,47 @@ module tb;
 
 	reg [31:0] register[0:NUM_REG-1];
 	reg [31:0] HI, LO, PC;
+	wire [31:0] _PC;
+	wire [31:0] IF_ins, ID_ins, EX_ins, DM_ins, WB_ins;
+	wire Wen, Finish;
+	wire [9:0] RAddr_i, RAddr_d, WAddr_d;
+	reg [31:0] Rdata_i, Rdata_d;
+	wire [31:0] Wdata_d;
 
 	reg clk, rst;
+
+	pipeline pl(
+		.clk(clk),
+		.rst(rst),
+		.IF_ins(IF_ins),
+		.ID_ins(ID_ins),
+		.EX_ins(EX_ins),
+		.DM_ins(DM_ins),
+		.WB_ins(WB_ins),
+		.PC(PC),
+		.RAddr_i(RAddr_i),
+		.Rdata_i(Rdata_i),
+		.RAddr_d(RAddr_d),
+		.Rdata_d(Rdata_d),
+		.Wen(Wen),
+		.WAddr_d(WAddr_d),
+		.Wdata_d(Wdata_d),
+		._PC(_PC),
+		.Finish(Finish));
+
+	always #(`CYC/2) clk = ~clk;
+
+	initial begin
+		clk = 1'b0;
+		rst = 1'b0;
+		@(negedge clk) rst = 1'b1;
+		#(`CYC); rst = 1'b0;
+	end
+
+	always@(posedge clk)begin
+		Rdata_i = i_disk[RAddr_i>>2];
+		$fwrite(errorfile, "%h, %h\n", RAddr_i, Rdata_i);
+	end
 
 	initial begin
 		snapfile = $fopen("snapshot.rpt", "w");
@@ -89,10 +128,33 @@ module tb;
 		$fwrite(snapfile, "$HI: 0x%h\n", HI);
 		$fwrite(snapfile, "$LO: 0x%h\n", LO);
 		$fwrite(snapfile, "PC: 0x%h\n", PC);
+		$fwrite(snapfile, "IF: ");
 		$fwrite(snapfile, "ID: ");
-		print_ins(6'h08, 6'h00);
+		$fwrite(snapfile, "EX: ");
+		$fwrite(snapfile, "DM: ");
+		$fwrite(snapfile, "WB: ");
 	end
 
+	always@(posedge clk)begin
+		$fwrite(snapfile, "PC: 0x%h\n", _PC);
+		$fwrite(snapfile, "IF: ");
+		print_ins(IF_ins[31:26], IF_ins[5:0], ~((&IF_ins[31:26]) & (&IF_ins[20:0])));
+		$fwrite(snapfile, "\nID: ");
+		print_ins(ID_ins[31:26], ID_ins[5:0], ~((&ID_ins[31:26]) & (&ID_ins[20:0])));
+		$fwrite(snapfile, "\nEX: ");
+		print_ins(EX_ins[31:26], EX_ins[5:0], ~((&EX_ins[31:26]) & (&EX_ins[20:0])));
+		$fwrite(snapfile, "\nDM: ");
+		print_ins(DM_ins[31:26], DM_ins[5:0], ~((&DM_ins[31:26]) & (&DM_ins[20:0])));
+		$fwrite(snapfile, "\nWB: ");
+		print_ins(WB_ins[31:26], WB_ins[5:0], ~((&WB_ins[31:26]) & (&IF_ins[20:0])));
+		$fwrite(snapfile, "\n\n");
+	end
+
+	always@(posedge Finish)begin
+		$finish;
+	end
+
+	// print Instruction
 	task print_ins;
 		input [5:0] opcode, funct;
 		input is_NOP;
@@ -104,125 +166,125 @@ module tb;
 				case(funct)
 					
 					6'h20:begin
-						$fwrite(snapfile, "ADD\n");
+						$fwrite(snapfile, "ADD");
 					end
 					6'h21:begin
-						$fwrite(snapfile, "ADDU\n");
+						$fwrite(snapfile, "ADDU");
 					end
 					6'h22:begin
-						$fwrite(snapfile, "SUB\n");
+						$fwrite(snapfile, "SUB");
 					end
 					6'h24:begin
-						$fwrite(snapfile, "AND\n");
+						$fwrite(snapfile, "AND");
 					end
 					6'h25:begin
-						$fwrite(snapfile, "OR\n");
+						$fwrite(snapfile, "OR");
 					end
 					6'h26:begin
-						$fwrite(snapfile, "XOR\n");
+						$fwrite(snapfile, "XOR");
 					end
 					6'h27:begin
-						$fwrite(snapfile, "NOR\n");
+						$fwrite(snapfile, "NOR");
 					end
 					6'h28:begin
-						$fwrite(snapfile, "NAND\n");
+						$fwrite(snapfile, "NAND");
 					end
 					6'h2a:begin
-						$fwrite(snapfile, "SLT\n");
+						$fwrite(snapfile, "SLT");
 					end
 					6'h00:begin
 						if(is_NOP)
-							$fwrite(snapfile, "NOP\n");
+							$fwrite(snapfile, "NOP");
 						else
-							$fwrite(snapfile, "SLL\n");
+							$fwrite(snapfile, "SLL");
 					end
 					6'h02:begin
-						$fwrite(snapfile, "SRL\n");
+						$fwrite(snapfile, "SRL");
 					end
 					6'h03:begin
-						$fwrite(snapfile, "SRA\n");
+						$fwrite(snapfile, "SRA");
 					end
 					6'h08:begin
-						$fwrite(snapfile, "JR\n");
+						$fwrite(snapfile, "JR");
 					end
 					6'h18:begin
-						$fwrite(snapfile, "MULT\n");
+						$fwrite(snapfile, "MULT");
 					end
 					6'h19:begin
-						$fwrite(snapfile, "MULTU\n");
+						$fwrite(snapfile, "MULTU");
 					end
 					6'h10:begin
-						$fwrite(snapfile, "MFHI\n");
+						$fwrite(snapfile, "MFHI");
 					end
 					6'h12:begin
-						$fwrite(snapfile, "MFLO\n");
+						$fwrite(snapfile, "MFLO");
 					end
 
 				endcase
 
 			end
 			6'h08:begin
-				$fwrite(snapfile, "ADDI\n");
+				$fwrite(snapfile, "ADDI");
 			end
 			6'h09:begin
-				$fwrite(snapfile, "ADDIU\n");
+				$fwrite(snapfile, "ADDIU");
 			end
 			6'h23:begin
-				$fwrite(snapfile, "LW\n");
+				$fwrite(snapfile, "LW");
 			end
 			6'h21:begin
-				$fwrite(snapfile, "LH\n");
+				$fwrite(snapfile, "LH");
 			end
 			6'h25:begin
-				$fwrite(snapfile, "LHU\n");
+				$fwrite(snapfile, "LHU");
 			end
 			6'h20:begin
-				$fwrite(snapfile, "LB\n");
+				$fwrite(snapfile, "LB");
 			end
 			6'h24:begin
-				$fwrite(snapfile, "LBU\n");
+				$fwrite(snapfile, "LBU");
 			end
 			6'h2b:begin
-				$fwrite(snapfile, "SW\n");
+				$fwrite(snapfile, "SW");
 			end
 			6'h29:begin
-				$fwrite(snapfile, "SH\n");
+				$fwrite(snapfile, "SH");
 			end
 			6'h28:begin
-				$fwrite(snapfile, "SB\n");
+				$fwrite(snapfile, "SB");
 			end
 			6'h0f:begin
-				$fwrite(snapfile, "LUI\n");
+				$fwrite(snapfile, "LUI");
 			end
 			6'h0c:begin
-				$fwrite(snapfile, "ANDI\n");
+				$fwrite(snapfile, "ANDI");
 			end
 			6'h0d:begin
-				$fwrite(snapfile, "ORI\n");
+				$fwrite(snapfile, "ORI");
 			end
 			6'h0e:begin
-				$fwrite(snapfile, "NORI\n");
+				$fwrite(snapfile, "NORI");
 			end
 			6'h0a:begin
-				$fwrite(snapfile, "SLTI\n");
+				$fwrite(snapfile, "SLTI");
 			end
 			6'h04:begin
-				$fwrite(snapfile, "BEQ\n");
+				$fwrite(snapfile, "BEQ");
 			end
 			6'h05:begin
-				$fwrite(snapfile, "BNE\n");
+				$fwrite(snapfile, "BNE");
 			end
 			6'h07:begin
-				$fwrite(snapfile, "BGTZ\n");
+				$fwrite(snapfile, "BGTZ");
 			end
 			6'h02:begin
-				$fwrite(snapfile, "J\n");
+				$fwrite(snapfile, "J");
 			end
 			6'h03:begin
-				$fwrite(snapfile, "JAL\n");
+				$fwrite(snapfile, "JAL");
 			end
 			6'h3f:begin
-				$fwrite(snapfile, "HALT\n");
+				$fwrite(snapfile, "HALT");
 			end
 
 		endcase
