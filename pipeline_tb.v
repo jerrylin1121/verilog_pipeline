@@ -5,7 +5,7 @@
 module tb;
 
 	parameter DISK_SIZE = 1024;
-	parameter NUM_REG = 32;
+	parameter NUM_REG = 35;
 
 	reg [31:0] i_disk [0:DISK_SIZE-1];
 	reg [31:0] d_disk [0:DISK_SIZE-1];
@@ -13,9 +13,8 @@ module tb;
 	integer snapfile, errorfile;
 
 	reg [31:0] register[0:NUM_REG-1];
-	reg [31:0] HI, LO, PC;
 	wire [31:0] _PC;
-	wire [31:0] IF_ins, ID_ins, EX_ins, DM_ins, WB_ins;
+	wire [31:0] ID_ins, EX_ins, DM_ins, WB_ins;
 	wire Wen, Finish;
 	wire [9:0] RAddr_i, RAddr_d, WAddr_d;
 	reg [31:0] Rdata_i, Rdata_d;
@@ -26,13 +25,11 @@ module tb;
 	pipeline pl(
 		.clk(clk),
 		.rst(rst),
-		.IF_ins(IF_ins),
 		.ID_ins(ID_ins),
 		.EX_ins(EX_ins),
 		.DM_ins(DM_ins),
 		.WB_ins(WB_ins),
-		.PC(PC),
-		.RAddr_i(RAddr_i),
+		.PC(register[34]),
 		.Rdata_i(Rdata_i),
 		.RAddr_d(RAddr_d),
 		.Rdata_d(Rdata_d),
@@ -45,15 +42,15 @@ module tb;
 	always #(`CYC/2) clk = ~clk;
 
 	initial begin
-		clk = 1'b0;
-		rst = 1'b0;
-		@(negedge clk) rst = 1'b1;
-		#(`CYC); rst = 1'b0;
+		clk = 1'b1;
+		rst = 1'b1;
+		#(5); rst = 1'b0;
 	end
 
-	always@(posedge clk)begin
-		Rdata_i = i_disk[RAddr_i>>2];
-		$fwrite(errorfile, "%h, %h\n", RAddr_i, Rdata_i);
+	always@(negedge clk)begin
+		Rdata_i <= i_disk[register[34]>>2];
+		$fwrite(errorfile, "%h, %h\n",register[34], Rdata_i);
+		register[34] <= _PC;
 	end
 
 	initial begin
@@ -66,15 +63,13 @@ module tb;
 	initial begin
 		//Initial disk
 		i = 0;
-		HI = 0;
-		LO = 0;
-		repeat(32)begin
+		repeat(34)begin
 			i_disk[i] = 0;
 			d_disk[i] = 0;
 			register[i] = 0;
 			i = i + 1;
 		end
-		repeat(992)begin
+		repeat(990)begin
 			i_disk[i] = 0;
 			d_disk[i] = 0;
 			i = i + 1;
@@ -83,7 +78,7 @@ module tb;
 		//Read data from iimage.bin
 		ifile = $fopen(`IDISK, "rb");
 		r = $fread(in, ifile);
-		PC = in;
+		register[34] = in;
 		i = 0;
 		r = $fread(in, ifile);
 		num = in;
@@ -91,9 +86,9 @@ module tb;
 		i = 0;
 		repeat(num)begin
 			r = $fread(in, ifile);
-			i_disk[(PC>>2)+i] = in;
-			i_disk[(PC>>2)+i] = in;
-			$display("0x%h", i_disk[(PC>>2)+i]);
+			i_disk[(register[34]>>2)+i] = in;
+			i_disk[(register[34]>>2)+i] = in;
+			$display("0x%h", i_disk[(register[34]>>2)+i]);
 			i = i + 1;
 		end
 		$fclose(ifile);
@@ -118,7 +113,7 @@ module tb;
 	end
 
 	//print output to file
-	initial begin
+	/*initial begin
 		$fwrite(snapfile, "cycle 0\n");
 		i = 0;
 		repeat(32)begin
@@ -127,18 +122,19 @@ module tb;
 		end
 		$fwrite(snapfile, "$HI: 0x%h\n", HI);
 		$fwrite(snapfile, "$LO: 0x%h\n", LO);
-		$fwrite(snapfile, "PC: 0x%h\n", PC);
-		$fwrite(snapfile, "IF: ");
-		$fwrite(snapfile, "ID: ");
-		$fwrite(snapfile, "EX: ");
-		$fwrite(snapfile, "DM: ");
-		$fwrite(snapfile, "WB: ");
-	end
+	end*/
 
 	always@(posedge clk)begin
-		$fwrite(snapfile, "PC: 0x%h\n", _PC);
-		$fwrite(snapfile, "IF: ");
-		print_ins(IF_ins[31:26], IF_ins[5:0], ~((&IF_ins[31:26]) & (&IF_ins[20:0])));
+		$fwrite(snapfile, "cycle \n");
+		i = 0;
+		repeat(32)begin
+			$fwrite(snapfile, "$%02d: 0x%h\n", i, register[i]);
+			i = i + 1;
+		end
+		$fwrite(snapfile, "$HI: 0x%h\n", register[32]);
+		$fwrite(snapfile, "$LO: 0x%h\n", register[33]);
+		$fwrite(snapfile, "PC: 0x%h\n", register[34]);
+		$fwrite(snapfile, "IF: 0x%h", i_disk[register[34]>>2]);
 		$fwrite(snapfile, "\nID: ");
 		print_ins(ID_ins[31:26], ID_ins[5:0], ~((&ID_ins[31:26]) & (&ID_ins[20:0])));
 		$fwrite(snapfile, "\nEX: ");
@@ -146,8 +142,8 @@ module tb;
 		$fwrite(snapfile, "\nDM: ");
 		print_ins(DM_ins[31:26], DM_ins[5:0], ~((&DM_ins[31:26]) & (&DM_ins[20:0])));
 		$fwrite(snapfile, "\nWB: ");
-		print_ins(WB_ins[31:26], WB_ins[5:0], ~((&WB_ins[31:26]) & (&IF_ins[20:0])));
-		$fwrite(snapfile, "\n\n");
+		print_ins(WB_ins[31:26], WB_ins[5:0], ~((&WB_ins[31:26]) & (&WB_ins[20:0])));
+		$fwrite(snapfile, "\n\n\n");
 	end
 
 	always@(posedge Finish)begin
