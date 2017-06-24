@@ -13,44 +13,78 @@ module tb;
 	integer snapfile, errorfile;
 
 	reg [31:0] register[0:NUM_REG-1];
-	wire [31:0] _PC;
-	wire [31:0] ID_ins, EX_ins, DM_ins, WB_ins;
+	wire [33:0] print_reg;
+	wire [31:0] _PC, _HI, _LO;
+	wire [4:0] RA, RB;
+	reg [31:0] A, B;
+	wire RWen;
+	wire [4:0]RWAddr;
+	wire [31:0]RWdata;
+
+	wire [31:0] IF_ins, ID_ins, EX_ins, DM_ins, WB_ins;
 	wire Wen, Finish;
+	wire [1:0]WSize;
 	wire [9:0] RAddr_i, RAddr_d, WAddr_d;
 	reg [31:0] Rdata_i, Rdata_d;
 	wire [31:0] Wdata_d;
 
 	reg clk, rst;
+	reg [19:0]cycle;
 
 	pipeline pl(
 		.clk(clk),
 		.rst(rst),
+		.IF_ins(IF_ins),
 		.ID_ins(ID_ins),
 		.EX_ins(EX_ins),
 		.DM_ins(DM_ins),
 		.WB_ins(WB_ins),
+		.HI(register[32]),
+		.LO(register[33]),
 		.PC(register[34]),
 		.Rdata_i(Rdata_i),
 		.RAddr_d(RAddr_d),
 		.Rdata_d(Rdata_d),
 		.Wen(Wen),
+		.WSize(WSize),
 		.WAddr_d(WAddr_d),
 		.Wdata_d(Wdata_d),
+		._HI(_HI),
+		._LO(_LO),
 		._PC(_PC),
-		.Finish(Finish));
+		.RA(RA),
+		.RB(RB),
+		.A(A),
+		.B(B),
+		.Finish(Finish),
+		.RWen(RWen),
+		.RWAddr(RWAddr),
+		.RWdata(RWdata),
+		.print_reg(print_reg));
 
 	always #(`CYC/2) clk = ~clk;
 
 	initial begin
 		clk = 1'b1;
 		rst = 1'b1;
+		cycle = 20'b1111_1111_1111_1111_1110;
 		#(5); rst = 1'b0;
 	end
 
 	always@(negedge clk)begin
 		Rdata_i <= i_disk[register[34]>>2];
 		$fwrite(errorfile, "%h, %h\n",register[34], Rdata_i);
-		register[34] <= _PC;
+	end
+
+	always@(posedge clk)begin
+		Rdata_d <= d_disk[RAddr_d>>2];
+	end
+
+	always@(negedge clk)begin
+		A <= register[RA];
+		B <= register[RB];
+		$fwrite(errorfile, "%h, %h\n", RA, A);
+		$fwrite(errorfile, "%h, %h\n", RB, B);	
 	end
 
 	initial begin
@@ -113,37 +147,33 @@ module tb;
 	end
 
 	//print output to file
-	/*initial begin
-		$fwrite(snapfile, "cycle 0\n");
-		i = 0;
-		repeat(32)begin
-			$fwrite(snapfile, "$%02d: 0x%h\n", i, register[i]);
-			i = i + 1;
-		end
-		$fwrite(snapfile, "$HI: 0x%h\n", HI);
-		$fwrite(snapfile, "$LO: 0x%h\n", LO);
-	end*/
-
 	always@(posedge clk)begin
-		$fwrite(snapfile, "cycle \n");
-		i = 0;
-		repeat(32)begin
-			$fwrite(snapfile, "$%02d: 0x%h\n", i, register[i]);
-			i = i + 1;
+		if(~cycle[19])begin
+			$fwrite(snapfile, "cycle %0d\n", cycle);
+			i = 0;
+			repeat(32)begin
+//				if(print_reg[i])
+					$fwrite(snapfile, "$%02d: 0x%h\n", i, register[i]);
+				i = i + 1;
+			end
+			if(print_reg[32])
+				$fwrite(snapfile, "$HI: 0x%h\n", register[32]);
+			if(print_reg[33])
+				$fwrite(snapfile, "$LO: 0x%h\n", register[33]);
+			$fwrite(snapfile, "PC: 0x%h\n", register[34]-4);
+			$fwrite(snapfile, "IF: 0x%h", IF_ins);
+			$fwrite(snapfile, "\nID: ");
+			print_ins(ID_ins[31:26], ID_ins[5:0], ~((&ID_ins[31:26]) & (&ID_ins[20:0])));
+			$fwrite(snapfile, "\nEX: ");
+			print_ins(EX_ins[31:26], EX_ins[5:0], ~((&EX_ins[31:26]) & (&EX_ins[20:0])));
+			$fwrite(snapfile, "\nDM: ");
+			print_ins(DM_ins[31:26], DM_ins[5:0], ~((&DM_ins[31:26]) & (&DM_ins[20:0])));
+			$fwrite(snapfile, "\nWB: ");
+			print_ins(WB_ins[31:26], WB_ins[5:0], ~((&WB_ins[31:26]) & (&WB_ins[20:0])));
+			$fwrite(snapfile, "\n\n\n");
 		end
-		$fwrite(snapfile, "$HI: 0x%h\n", register[32]);
-		$fwrite(snapfile, "$LO: 0x%h\n", register[33]);
-		$fwrite(snapfile, "PC: 0x%h\n", register[34]);
-		$fwrite(snapfile, "IF: 0x%h", i_disk[register[34]>>2]);
-		$fwrite(snapfile, "\nID: ");
-		print_ins(ID_ins[31:26], ID_ins[5:0], ~((&ID_ins[31:26]) & (&ID_ins[20:0])));
-		$fwrite(snapfile, "\nEX: ");
-		print_ins(EX_ins[31:26], EX_ins[5:0], ~((&EX_ins[31:26]) & (&EX_ins[20:0])));
-		$fwrite(snapfile, "\nDM: ");
-		print_ins(DM_ins[31:26], DM_ins[5:0], ~((&DM_ins[31:26]) & (&DM_ins[20:0])));
-		$fwrite(snapfile, "\nWB: ");
-		print_ins(WB_ins[31:26], WB_ins[5:0], ~((&WB_ins[31:26]) & (&WB_ins[20:0])));
-		$fwrite(snapfile, "\n\n\n");
+		cycle = cycle+1;
+		register[34] = _PC;
 	end
 
 	always@(posedge Finish)begin
