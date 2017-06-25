@@ -31,6 +31,11 @@ module tb;
 	reg clk, rst;
 	reg [19:0]cycle;
 
+	wire stalled, flush;
+	wire rs, rt;
+	wire EX_DM_to_ID;
+	wire [4:0] EX_DM_to_ID_reg;
+
 	pipeline pl(
 		.clk(clk),
 		.rst(rst),
@@ -60,15 +65,21 @@ module tb;
 		.RWen(RWen),
 		.RWAddr(RWAddr),
 		.RWdata(RWdata),
-		.print_reg(print_reg));
+		.print_reg(print_reg),
+		.stalled(stalled),
+		.flush(flush),
+		.rs(rs),
+		.rt(rt),
+		.EX_DM_to_ID(EX_DM_to_ID),
+		.EX_DM_to_ID_reg(EX_DM_to_ID_reg));
 
 	always #(`CYC/2) clk = ~clk;
 
 /*	initial begin
 		$fsdbDumpfile("pipeline.fsdb");
 		$fsdbDumpvars;
-	end*/
-
+	end
+*/
 	initial begin
 		clk = 1'b1;
 		rst = 1'b1;
@@ -85,9 +96,21 @@ module tb;
 		Rdata_d <= d_disk[RAddr_d>>2];
 	end
 
+	reg prev_dif, dif;
+
+	always@(posedge clk)begin
+		prev_dif <= dif;
+	end
+
 	always@(negedge clk)begin
+		dif <= 1'b0;
 		if(RWen)begin
-			register[RWAddr] = RWdata;
+			if(register[RWAddr]!=RWdata)begin
+				dif <= 1'b1;
+				register[RWAddr] <= RWdata;
+			end else begin
+				dif <= 1'b0;
+			end
 		end
 		A <= register[RA];
 		B <= register[RB];
@@ -154,24 +177,45 @@ module tb;
 		$fclose(dfile);
 	end
 
+	wire [31:0] pc = register[34] - 4;
+
 	//print output to file
 	always@(negedge clk)begin
 		if(~cycle[19])begin
 			$fwrite(snapfile, "cycle %0d\n", cycle);
+			if(!(|cycle))begin
+				i = 0;
+				repeat(32)begin
+					$fwrite(snapfile, "$%02d: 0x%08h\n", i, register[i]);
+					i = i + 1;
+				end
+				$fwrite(snapfile, "$HI: 0x%08h\n", register[32]);
+				$fwrite(snapfile, "$LO: 0x%08h\n", register[33]);
+			end
 			i = 0;
 			repeat(32)begin
-				if(print_reg[i])
-					$fwrite(snapfile, "$%02d: 0x%h\n", i, register[i]);
+				if(print_reg[i] & prev_dif)
+					$fwrite(snapfile, "$%02d: 0x%08h\n", i, register[i]);
 				i = i + 1;
 			end
 			if(print_reg[32])
-				$fwrite(snapfile, "$HI: 0x%h\n", register[32]);
+				$fwrite(snapfile, "$HI: 0x%08h\n", register[32]);
 			if(print_reg[33])
-				$fwrite(snapfile, "$LO: 0x%h\n", register[33]);
-			$fwrite(snapfile, "PC: 0x%h\n", register[34]-4);
-			$fwrite(snapfile, "IF: 0x%h", IF_ins);
+				$fwrite(snapfile, "$LO: 0x%08h\n", register[33]);
+			$fwrite(snapfile, "PC: 0x%08h\n", pc);
+			$fwrite(snapfile, "IF: 0x%08h", IF_ins);
+			if(stalled)
+				$fwrite(snapfile, " to_be_stalled");
 			$fwrite(snapfile, "\nID: ");
 			print_ins(ID_ins[31:26], ID_ins[5:0], ~((&ID_ins[31:26]) & (&ID_ins[20:0])));
+			if(stalled)
+				$fwrite(snapfile, " to_be_stalled");
+			if(EX_DM_to_ID)
+				$fwrite(snapfile, " fwd_EX-DM_r");
+			if(rs)
+				$fwrite(snapfile, "s_$%0d", EX_DM_to_ID_reg);
+			if(rt)
+				$fwrite(snapfile, "t_$%0d", EX_DM_to_ID_reg);
 			$fwrite(snapfile, "\nEX: ");
 			print_ins(EX_ins[31:26], EX_ins[5:0], ~((&EX_ins[31:26]) & (&EX_ins[20:0])));
 			$fwrite(snapfile, "\nDM: ");
