@@ -64,6 +64,11 @@ module tb;
 
 	always #(`CYC/2) clk = ~clk;
 
+/*	initial begin
+		$fsdbDumpfile("pipeline.fsdb");
+		$fsdbDumpvars;
+	end*/
+
 	initial begin
 		clk = 1'b1;
 		rst = 1'b1;
@@ -76,11 +81,14 @@ module tb;
 		$fwrite(errorfile, "%h, %h\n",register[34], Rdata_i);
 	end
 
-	always@(posedge clk)begin
+	always@(negedge clk)begin
 		Rdata_d <= d_disk[RAddr_d>>2];
 	end
 
 	always@(negedge clk)begin
+		if(RWen)begin
+			register[RWAddr] = RWdata;
+		end
 		A <= register[RA];
 		B <= register[RB];
 		$fwrite(errorfile, "%h, %h\n", RA, A);
@@ -147,12 +155,12 @@ module tb;
 	end
 
 	//print output to file
-	always@(posedge clk)begin
+	always@(negedge clk)begin
 		if(~cycle[19])begin
 			$fwrite(snapfile, "cycle %0d\n", cycle);
 			i = 0;
 			repeat(32)begin
-//				if(print_reg[i])
+				if(print_reg[i])
 					$fwrite(snapfile, "$%02d: 0x%h\n", i, register[i]);
 				i = i + 1;
 			end

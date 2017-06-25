@@ -33,6 +33,7 @@ module pipeline(clk, rst, IF_ins, ID_ins, EX_ins, DM_ins, WB_ins, HI, LO, PC, Rd
 
 	reg [3:0] reg_use[0:31];
 	reg [3:0] reg_use_next[0:31];
+	reg [33:0] WB_print_reg, WB_print_reg_next;
 	reg [33:0] print_reg_next;
 
 	reg signed [31:0] ID_A, ID_B, ID_A_next, ID_B_next;
@@ -40,9 +41,17 @@ module pipeline(clk, rst, IF_ins, ID_ins, EX_ins, DM_ins, WB_ins, HI, LO, PC, Rd
 	reg signed [31:0] DM_B, DM_B_next;
 	reg [31:0] EX_ALUOUT, EX_ALUOUT_next;
 	reg [31:0] DM_ALUOUT, DM_ALUOUT_next, DM_MDR, DM_MDR_next;
+	reg count;
+	reg stalled, stalled_next;
+	reg flush, flush_next;
+	reg EX_ALUReady, EX_ALUReady_next;
+	reg DM_ALUReady, DM_ALUReady_next;
+	reg DM_MDRReady, DM_MDRReady_next;
+	reg WB_ALUReady, WB_ALUReady_next;
+	reg WB_MDRReady, WB_MDRReady_next;
 
 	always@(posedge clk, posedge rst)begin
-		if(rst)begin
+		if(rst | ~count)begin
 			IF_ins <= 32'b0;
 			ID_ins <= 32'b0;
 			EX_ins <= 32'b0;
@@ -55,7 +64,6 @@ module pipeline(clk, rst, IF_ins, ID_ins, EX_ins, DM_ins, WB_ins, HI, LO, PC, Rd
 			Wdata_d <= 32'b0;
 			_HI <= HI;
 			_LO <= LO;
-			_PC <= PC;
 			RA <= 5'b0;
 			RB <= 5'b0;
 			Finish <= 1'b0;
@@ -94,6 +102,7 @@ module pipeline(clk, rst, IF_ins, ID_ins, EX_ins, DM_ins, WB_ins, HI, LO, PC, Rd
 			reg_use[29] <= 4'b0;
 			reg_use[30] <= 4'b0;
 			reg_use[31] <= 4'b0;
+			WB_print_reg <= 34'b0;
 			print_reg <= 34'b0;
 			ID_A <= 32'b0;
 			ID_B <= 32'b0;
@@ -103,6 +112,13 @@ module pipeline(clk, rst, IF_ins, ID_ins, EX_ins, DM_ins, WB_ins, HI, LO, PC, Rd
 			EX_ALUOUT <= 32'b0;
 			DM_ALUOUT <= 32'b0;
 			DM_MDR <= 32'b0;
+			EX_ALUReady <= 1'b0;
+			DM_ALUReady <= 1'b0;
+			DM_MDRReady <= 1'b0;
+			WB_ALUReady <= 1'b0;
+			WB_MDRReady <= 1'b0;
+			stalled <= 1'b0;
+			flush <= 1'b0;
 		end else begin
 			IF_ins <= IF_ins_next;
 			ID_ins <= ID_ins_next;
@@ -116,7 +132,6 @@ module pipeline(clk, rst, IF_ins, ID_ins, EX_ins, DM_ins, WB_ins, HI, LO, PC, Rd
 			Wdata_d <= Wdata_d_next;
 			_HI <= _HI_next;
 			_LO <= _LO_next;
-			_PC <= _PC_next;
 			RA <= RA_next;
 			RB <= RB_next;
 			Finish <= Finish_next;
@@ -155,6 +170,7 @@ module pipeline(clk, rst, IF_ins, ID_ins, EX_ins, DM_ins, WB_ins, HI, LO, PC, Rd
 			reg_use[29] <= reg_use_next[29];
 			reg_use[30] <= reg_use_next[30];
 			reg_use[31] <= reg_use_next[31];
+			WB_print_reg <= WB_print_reg_next;
 			print_reg <= print_reg_next;
 			ID_A <= ID_A_next;
 			ID_B <= ID_B_next;
@@ -164,11 +180,27 @@ module pipeline(clk, rst, IF_ins, ID_ins, EX_ins, DM_ins, WB_ins, HI, LO, PC, Rd
 			EX_ALUOUT <= EX_ALUOUT_next;
 			DM_ALUOUT <= DM_ALUOUT_next;
 			DM_MDR <= DM_MDR_next;
+			EX_ALUReady <= EX_ALUReady_next;
+			DM_ALUReady <= DM_ALUReady_next;
+			DM_MDRReady <= DM_MDRReady_next;
+			WB_ALUReady <= WB_ALUReady_next;
+			WB_MDRReady <= WB_MDRReady_next;
+			stalled <= stalled_next;
+			flush <= flush_next;
+		end
+	end
+	
+	always@(posedge clk or posedge rst)begin
+		if(rst)begin
+			count <= 1'b0;
+			_PC <= PC;
+		end else begin
+			count <= 1'b1;
+			_PC <= _PC_next;
 		end
 	end
 
 	always@(*)begin
-		print_reg_next = 34'b0;
 		IF_ins_next = Rdata_i;
 		RA_next = Rdata_i[25:21];
 		RB_next = Rdata_i[20:16];
@@ -191,10 +223,58 @@ module pipeline(clk, rst, IF_ins, ID_ins, EX_ins, DM_ins, WB_ins, HI, LO, PC, Rd
 		endcase
 	end
 	always@(*)begin
-		ID_ins_next = IF_ins;
+		ID_ins_next = (flush) ? 32'b0: IF_ins;
 		_PC_next = _PC+4;
 		ID_A_next = A;
 		ID_B_next = B;
+		flush_next = 1'b0;
+		case(IF_ins[31:26])
+			6'h00:begin
+				if(IF_ins[5:0]==6'h08)begin
+					_PC_next = A;
+					flush_next = 1'b1;
+				end
+			end
+			6'h04:begin
+				if(A==B)begin
+					_PC_next = _PC + {{14{IF_ins[15]}}, IF_ins[15:0], 2'b0};
+					flush_next = 1'b1;
+				end
+			end
+			6'h05:begin
+				if(A!=B)begin
+					_PC_next = _PC + {{14{IF_ins[15]}}, IF_ins[15:0], 2'b0};
+					flush_next = 1'b1;
+				end
+			end
+			6'h07:begin
+				if(!A[31])begin
+					_PC_next = _PC + {{14{IF_ins[15]}}, IF_ins[15:0], 2'b0};
+					flush_next = 1'b1;
+				end
+			end
+			6'h02, 6'h03:begin
+				_PC_next = { 4'b0, IF_ins[25:0], 2'b0 };
+				flush_next = 1'b1;
+			end
+		endcase
+		case(IF_ins[31:26])
+			6'h00:begin
+				case(IF_ins[5:0])
+					6'h20, 6'h21, 6'h22, 6'h24, 6'h25, 6'h26, 6'h27, 6'h28, 6'h2a, 6'h02, 6'h03, 6'h10, 6'h12:begin
+						reg_use[IF_ins[15:11]] = 4'b0010;
+					end
+					6'h00:begin
+						if(!{IF_ins[31:26],IF_ins[20:0]})begin
+							reg_use[IF_ins[15:11]] = 4'b0010;
+						end
+					end
+				endcase
+			end
+			6'h08, 6'h09, 6'h23, 6'h21, 6'h25, 6'h20, 6'h24, 6'h2b, 6'h29, 6'h28, 6'h0f, 6'h0c, 6'h0d, 6'h0e, 6'h0a:begin
+				reg_use[IF_ins[20:16]] = 4'b0010;
+			end
+		endcase
 	end
 	always@(*)begin
 		EX_ins_next = ID_ins;
@@ -203,20 +283,42 @@ module pipeline(clk, rst, IF_ins, ID_ins, EX_ins, DM_ins, WB_ins, HI, LO, PC, Rd
 		if(ID_ins[31:26]==6'h00)begin
 			case(ID_ins[5:0])
 				6'h18, 6'h19, 6'h10, 6'h12:begin
+					EX_ALUOUT_next = 32'b0;
+					EX_ALUReady_next = 1'b0;
 				end
 				default:begin
-					ALU(ID_ins, ID_A, ID_B, EX_ALUOUT_next);
+					ALU(ID_ins, ID_A, ID_B, EX_ALUOUT_next, EX_ALUReady_next);
 				end
 			endcase
 		end
+		case(ID_ins[31:26])
+			6'h00:begin
+				case(ID_ins[5:0])
+					6'h20, 6'h21, 6'h22, 6'h24, 6'h25, 6'h26, 6'h27, 6'h28, 6'h2a, 6'h02, 6'h03, 6'h10, 6'h12:begin
+						reg_use[ID_ins[15:11]] = 4'b0100;
+					end
+					6'h00:begin
+						if(!{ID_ins[31:26],ID_ins[20:0]})begin
+							reg_use[ID_ins[15:11]] = 4'b0100;
+						end
+					end
+				endcase
+			end
+			6'h08, 6'h09, 6'h23, 6'h21, 6'h25, 6'h20, 6'h24, 6'h2b, 6'h29, 6'h28, 6'h0f, 6'h0c, 6'h0d, 6'h0e, 6'h0a:begin
+				reg_use[ID_ins[20:16]] = 4'b0100;
+			end
+		endcase
 	end
 	always@(*)begin
 		DM_ins_next = EX_ins;
 		DM_B_next = EX_B;
 		DM_ALUOUT_next = EX_ALUOUT;
+		DM_ALUReady_next = EX_ALUReady;
+		DM_MDRReady_next = 1'b0;
 		case(EX_ins)
 			6'h23, 6'h21, 6'h25, 6'h20, 6'h24:begin
 				RAddr_d_next = EX_ALUOUT;
+				DM_MDRReady_next = 1'b1;
 			end
 			default:begin
 				RAddr_d_next = RAddr_d;
@@ -248,9 +350,29 @@ module pipeline(clk, rst, IF_ins, ID_ins, EX_ins, DM_ins, WB_ins, HI, LO, PC, Rd
 				Wdata_d_next = Wdata_d;
 			end
 		endcase
+		case(EX_ins[31:26])
+			6'h00:begin
+				case(EX_ins[5:0])
+					6'h20, 6'h21, 6'h22, 6'h24, 6'h25, 6'h26, 6'h27, 6'h28, 6'h2a, 6'h02, 6'h03, 6'h10, 6'h12:begin
+						reg_use[EX_ins[15:11]] = 4'b1000;
+					end
+					6'h00:begin
+						if(!{EX_ins[31:26],EX_ins[20:0]})begin
+							reg_use[EX_ins[15:11]] = 4'b1000;
+						end
+					end
+				endcase
+			end
+			6'h08, 6'h09, 6'h23, 6'h21, 6'h25, 6'h20, 6'h24, 6'h2b, 6'h29, 6'h28, 6'h0f, 6'h0c, 6'h0d, 6'h0e, 6'h0a:begin
+				reg_use[EX_ins[20:16]] = 4'b1000;
+			end
+		endcase
 	end
 	always@(*)begin
 		WB_ins_next = DM_ins;
+		WB_print_reg_next = 34'b0;
+		WB_ALUReady_next = DM_ALUReady;
+		WB_MDRReady_next = DM_MDRReady;
 		case(DM_ins[31:26])
 			6'h00:begin
 				case(DM_ins[5:0])
@@ -258,11 +380,13 @@ module pipeline(clk, rst, IF_ins, ID_ins, EX_ins, DM_ins, WB_ins, HI, LO, PC, Rd
 						RWen_next = 1'b0;
 						RWAddr_next = 5'b0;
 						RWdata_next = 32'b0;
+						WB_print_reg_next = 34'b0;
 					end
 					default:begin
 						RWen_next = 1'b1;
 						RWAddr_next = DM_ins[15:11];
 						RWdata_next = DM_ALUOUT;
+						WB_print_reg_next[DM_ins[15:11]] = 1'b1;		
 					end
 				endcase
 			end
@@ -270,43 +394,54 @@ module pipeline(clk, rst, IF_ins, ID_ins, EX_ins, DM_ins, WB_ins, HI, LO, PC, Rd
 				RWen_next = 1'b1;
 				RWAddr_next = DM_ins[20:16];
 				RWdata_next = DM_ALUOUT;
+				WB_print_reg_next[DM_ins[20:16]] = 1'b1;
 			end
 			6'h03:begin
 				RWen_next = 1'b1;
 				RWAddr_next = 5'b11111;
 				RWdata_next = DM_ALUOUT;
+				WB_print_reg_next[5'b11111] = 1'b1;
 			end
 			6'h23:begin
 				RWen_next = 1'b1;
 				RWAddr_next = DM_ins[20:16];
 				RWdata_next = Rdata_d;
+				WB_print_reg_next[DM_ins[20:16]] = 1'b1;
 			end
 			6'h21:begin
 				RWen_next = 1'b1;
 				RWAddr_next = DM_ins[20:16];
 				RWdata_next = {{16{Rdata_d[15]}},Rdata_d[15:0]};
+				WB_print_reg_next[DM_ins[20:16]] = 1'b1;
 			end
 			6'h25:begin
 				RWen_next = 1'b1;
 				RWAddr_next = DM_ins[20:16];
 				RWdata_next = {{16{1'b0}},Rdata_d[15:0]};
+				WB_print_reg_next[DM_ins[20:16]] = 1'b1;
 			end
 			6'h20:begin
 				RWen_next = 1'b1;
 				RWAddr_next = DM_ins[20:16];
 				RWdata_next = {{24{Rdata_d[7]}},Rdata_d[7:0]};
+				WB_print_reg_next[DM_ins[20:16]] = 1'b1;
 			end
 			6'h24:begin
 				RWen_next = 1'b1;
 				RWAddr_next = DM_ins[20:16];
 				RWdata_next = {{24{1'b0}},Rdata_d[7:0]};
+				WB_print_reg_next[DM_ins[20:16]] = 1'b1;
 			end
 			default:begin
 				RWen_next = 1'b0;
 				RWAddr_next = 5'b0;
 				RWdata_next = 32'b0;
+				WB_print_reg_next = 34'b0;
 			end
 		endcase
+	end
+	always@(*)begin
+		print_reg_next = WB_print_reg;
 	end
 	always@(*)begin
 		Finish_next = (&ID_ins[31:26]) & (&EX_ins[31:26]) & (&DM_ins[31:26]) & (&WB_ins[31:26]);
@@ -316,68 +451,92 @@ module pipeline(clk, rst, IF_ins, ID_ins, EX_ins, DM_ins, WB_ins, HI, LO, PC, Rd
 		input [31:0] ins;
 		input [31:0] A, B;
 		output reg [31:0] ALUOut;
+		output reg ALUReady;
 
 		case(ins[31:26])
 			6'h00:begin
 				case(ins[5:0])
 					6'h20, 6'h21:begin
 						ALUOut = A + B;
+						ALUReady = 1'b1;
 					end
 					6'h22:begin
 						ALUOut = A - B;
+						ALUReady = 1'b1;
 					end
 					6'h24:begin
 						ALUOut = A & B;
+						ALUReady = 1'b1;
 					end
 					6'h25:begin
 						ALUOut = A | B;
+						ALUReady = 1'b1;
 					end
 					6'h26:begin
 						ALUOut = A ^ B;
+						ALUReady = 1'b1;
 					end
 					6'h27:begin
 						ALUOut = ~(A | B);
+						ALUReady = 1'b1;
 					end
 					6'h28:begin
 						ALUOut = ~(A & B);
+						ALUReady = 1'b1;
 					end
 					6'h2a:begin
 						ALUOut = $signed(A) < $signed(B);
+						ALUReady = 1'b1;
 					end
 					6'h00:begin
 						ALUOut = B << ins[10:6];
+						ALUReady = 1'b1;
 					end
 					6'h02:begin
 						ALUOut = B >> ins[10:6];
+						ALUReady = 1'b1;
 					end
 					6'h03:begin
 						ALUOut = {{32{B[31]}}, B} >> ins[10:6];
+						ALUReady = 1'b1;
 					end
 					default:begin
 						ALUOut = 32'b0;
+						ALUReady = 1'b0;
 					end
 				endcase
 			end
-			6'h08, 6'h09, 6'h23, 6'h21, 6'h25, 6'h20, 6'h24, 6'h2b, 6'h29, 6'h28:begin
+			6'h08, 6'h09:begin
 				ALUOut = A + {{16{ins[15]}},ins[15:0]};
+				ALUReady = 1'b1;
+			end
+			6'h23, 6'h21, 6'h25, 6'h20, 6'h24, 6'h2b, 6'h29, 6'h28:begin
+				ALUOut = A + {{16{ins[15]}},ins[15:0]};
+				ALUReady = 1'b0;
 			end
 			6'h0f:begin
 				ALUOut = {ins[15:0], 16'b0};
+				ALUReady = 1'b1;
 			end
 			6'h0c:begin
 				ALUOut = A & {16'b0, ins[15:0]};
+				ALUReady = 1'b1;
 			end
 			6'h0d:begin
 				ALUOut = A | {16'b0, ins[15:0]};
+				ALUReady = 1'b1;
 			end
 			6'h0e:begin
 				ALUOut = ~( A | {16'b0, ins[15:0]} );
+				ALUReady = 1'b1;
 			end
 			6'h0a:begin
 				ALUOut = $signed(A)< $signed({{16{ins[15]}}, ins[15:0]});
+				ALUReady = 1'b1;
 			end
 			default:begin
 				ALUOut = 32'b0;
+				ALUReady = 1'b0;
 			end
 		endcase		
 
