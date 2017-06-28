@@ -1,4 +1,4 @@
-module pipeline(clk, rst, IF_ins, ID_ins, EX_ins, DM_ins, WB_ins, HI, LO, PC, Rdata_i, RAddr_d, Rdata_d, Wen, WSize, WAddr_d, Wdata_d, _HI, _LO, _PC, RA, RB, A, B, Finish, RWen, RWAddr, RWdata, print_reg, stalled, flush, rs, rt, EX_DM_to_ID, EX_DM_to_ID_reg);
+module pipeline(clk, rst, IF_ins, ID_ins, EX_ins, DM_ins, WB_ins, HI, LO, PC, Rdata_i, RAddr_d, Rdata_d, Wen, WSize, WAddr_d, Wdata_d, _HI, _LO, _PC, RA, RB, A, B, Finish, RWen, RWAddr, RWdata, print_reg, stalled, flush, rs, rt, EX_DM_to_ID_reg, EX_DM_to_EX_reg, DM_WB_to_EX_reg, write_0, HI_LO_overwrite);
 
 	input clk, rst;
 	input [31:0] Rdata_i, Rdata_d;
@@ -18,8 +18,9 @@ module pipeline(clk, rst, IF_ins, ID_ins, EX_ins, DM_ins, WB_ins, HI, LO, PC, Rd
 	output reg [31:0]RWdata;
 	output reg [33:0] print_reg;
 	output reg stalled, flush;
-	output reg rs, rt, EX_DM_to_ID;
-	output reg [4:0] EX_DM_to_ID_reg;
+	output reg [2:0]rs, rt;
+	output reg [4:0] EX_DM_to_ID_reg, EX_DM_to_EX_reg, DM_WB_to_EX_reg;
+	output reg write_0, HI_LO_overwrite;
 
 	reg [31:0] IF_ins_next, ID_ins_next, EX_ins_next, DM_ins_next, WB_ins_next;
 	reg [9:0] RAddr_d_next;
@@ -57,11 +58,14 @@ module pipeline(clk, rst, IF_ins, ID_ins, EX_ins, DM_ins, WB_ins, HI, LO, PC, Rd
 	reg [4:0]WB_write, WB_write_next;
 	reg WB_dataready, WB_dataready_next;
 	reg [31:0]WB_data, WB_data_next;
-	reg _is_A, _is_B;
-	reg [31:0] _A_, _B_;
+	reg _is_A, _is_B, is_A_, is_B_;
+	reg [31:0] _A_, _B_, A_, B_;
 
-	reg rs_next, rt_next, EX_DM_to_ID_next;
-	reg [4:0] EX_DM_to_ID_reg_next;
+	reg [2:0]rs_next, rt_next;
+	reg [4:0] EX_DM_to_ID_reg_next, EX_DM_to_EX_reg_next, DM_WB_to_EX_reg_next;
+
+	reg write_0_next, HI_LO_overwrite_next;
+	reg HI_LO, HI_LO_next;
 
 	always@(posedge clk, posedge rst)begin
 		if(rst | ~count)begin
@@ -107,10 +111,14 @@ module pipeline(clk, rst, IF_ins, ID_ins, EX_ins, DM_ins, WB_ins, HI, LO, PC, Rd
 			WB_write <= 5'b0;
 			WB_dataready <= 1'b0;
 			WB_data <= 32'b0;
-			rs <= 1'b0;
-			rt <= 1'b0;
-			EX_DM_to_ID <= 1'b0;
+			rs <= 3'b0;
+			rt <= 3'b0;
 			EX_DM_to_ID_reg <= 5'b0;
+			EX_DM_to_EX_reg <= 5'b0;
+			DM_WB_to_EX_reg <= 5'b0;
+			write_0 <= 1'b0;
+			HI_LO_overwrite <= 1'b0;
+			HI_LO <= 1'b0;
 		end else begin
 			IF_ins <= IF_ins_next;
 			ID_ins <= ID_ins_next;
@@ -156,8 +164,12 @@ module pipeline(clk, rst, IF_ins, ID_ins, EX_ins, DM_ins, WB_ins, HI, LO, PC, Rd
 			WB_data <= WB_data_next;
 			rs <= rs_next;
 			rt <= rt_next;
-			EX_DM_to_ID <= EX_DM_to_ID_next;
 			EX_DM_to_ID_reg <= EX_DM_to_ID_reg_next;
+			EX_DM_to_EX_reg <= EX_DM_to_EX_reg_next;
+			DM_WB_to_EX_reg <= DM_WB_to_EX_reg_next;
+			write_0 <= write_0_next;
+			HI_LO_overwrite <= HI_LO_overwrite_next;
+			HI_LO <= HI_LO_next;
 		end
 	end
 	
@@ -190,56 +202,60 @@ module pipeline(clk, rst, IF_ins, ID_ins, EX_ins, DM_ins, WB_ins, HI, LO, PC, Rd
 		ID_dataready_next = 1'b0;
 		ID_data_next = 32'b0;
 		flush_next = 1'b0;
-		_stall(ID_ins_next, stalled_next, _is_A, _is_B, _A_, _B_, rs_next, rt_next, EX_DM_to_ID_next, EX_DM_to_ID_reg_next);
+		#10 _stall(ID_ins_next, stalled_next, _is_A, _is_B, _A_, _B_, rs_next[0], rt_next[0], EX_DM_to_ID_reg_next);
 		if(!stalled_next)begin
-		_PC_next = _PC+4;
-		ID_A_next = (_is_A) ? _A_: A;
-		ID_B_next = (_is_B) ? _B_: B;
-		case(IF_ins[31:26])
-			6'h00:begin
-				case(IF_ins[5:0])
-					6'h20, 6'h21, 6'h22, 6'h24, 6'h25, 6'h26, 6'h27, 6'h28, 6'h2a, 6'h00, 6'h02, 6'h03:begin
-						ID_write_next = IF_ins[15:11];
+			_PC_next = _PC+4;
+			ID_A_next = (_is_A) ? _A_: A;
+			ID_B_next = (_is_B) ? _B_: B;
+			case(ID_ins_next[31:26])
+				6'h00:begin
+					case(ID_ins_next[5:0])
+						6'h20, 6'h21, 6'h22, 6'h24, 6'h25, 6'h26, 6'h27, 6'h28, 6'h2a, 6'h00, 6'h02, 6'h03, 6'h10, 6'h12:begin
+							ID_write_next = ID_ins_next[15:11];
+						end
+					endcase
+				end
+				6'h08, 6'h09, 6'h23, 6'h21, 6'h25, 6'h20, 6'h24, 6'h0f, 6'h0c, 6'h0d, 6'h0e, 6'h0a:begin
+					ID_write_next = ID_ins_next[20:16];
+				end
+			endcase
+			case(ID_ins_next[31:26])
+				6'h00:begin
+					if(ID_ins_next[5:0]==6'h08)begin
+						_PC_next = A;
+						flush_next = 1'b1;
 					end
-				endcase
-			end
-			6'h08, 6'h09, 6'h23, 6'h21, 6'h25, 6'h20, 6'h24, 6'h0f, 6'h0c, 6'h0d, 6'h0e, 6'h0a:begin
-				ID_write_next = IF_ins[20:16];
-			end
-		endcase
-		case(IF_ins[31:26])
-			6'h00:begin
-				if(IF_ins[5:0]==6'h08)begin
-					_PC_next = A;
+				end
+				6'h04:begin
+					if(ID_A_next==ID_B_next)begin
+						_PC_next = _PC + {{14{ID_ins_next[15]}}, ID_ins_next[15:0], 2'b0};
+						flush_next = 1'b1;
+					end
+				end
+				6'h05:begin
+					if(ID_A_next!=ID_B_next)begin
+						_PC_next = _PC + {{14{ID_ins_next[15]}}, ID_ins_next[15:0], 2'b0};
+						flush_next = 1'b1;
+					end
+				end
+				6'h07:begin
+					if(!ID_A_next[31])begin
+						_PC_next = _PC + {{14{ID_ins_next[15]}}, ID_ins_next[15:0], 2'b0};
+						flush_next = 1'b1;
+					end
+				end
+				6'h02, 6'h03:begin
+					_PC_next = { 4'b0, ID_ins_next[25:0], 2'b0 };
 					flush_next = 1'b1;
 				end
-			end
-			6'h04:begin
-				if(A==B)begin
-					_PC_next = _PC + {{14{IF_ins[15]}}, IF_ins[15:0], 2'b0};
-					flush_next = 1'b1;
-				end
-			end
-			6'h05:begin
-				if(A!=B)begin
-					_PC_next = _PC + {{14{IF_ins[15]}}, IF_ins[15:0], 2'b0};
-					flush_next = 1'b1;
-				end
-			end
-			6'h07:begin
-				if(!A[31])begin
-					_PC_next = _PC + {{14{IF_ins[15]}}, IF_ins[15:0], 2'b0};
-					flush_next = 1'b1;
-				end
-			end
-			6'h02, 6'h03:begin
-				_PC_next = { 4'b0, IF_ins[25:0], 2'b0 };
-				flush_next = 1'b1;
-			end
-		endcase
+			endcase
 		end
 	end
 	always@(*)begin
+		_HI_next = _HI;
+		_LO_next = _LO;
+		HI_LO_next = HI_LO;
+		HI_LO_overwrite_next = 1'b0;
 		if(stalled)begin
 			EX_ins_next = 32'b0;
 			EX_A_next = 32'b0;
@@ -251,18 +267,38 @@ module pipeline(clk, rst, IF_ins, ID_ins, EX_ins, DM_ins, WB_ins, HI, LO, PC, Rd
 			EX_ALUOUT_next = 32'b0;
 		end else begin
 			EX_ins_next = ID_ins;
-			EX_A_next = ID_A;
-			EX_B_next = ID_B;
 			EX_write_next = ID_write;
 			EX_dataready_next = ID_dataready;
 			EX_data_next = ID_data;
 			RAddr_d_next = RAddr_d;
 			EX_ALUOUT_next = 32'b0;
+			#5 fwd(ID_ins, is_A_, is_B_, A_, B_, rs_next[1], rt_next[1], rs_next[2], rt_next[2], EX_DM_to_EX_reg_next, DM_WB_to_EX_reg_next);
+			EX_A_next = (is_A_)? A_: ID_A;
+			EX_B_next = (is_B_)? B_: ID_B;
 			case(ID_ins[31:26])
 				6'h00:begin
 					case(ID_ins[5:0])
-						6'h18, 6'h19, 6'h10, 6'h12:begin
-							EX_ALUOUT_next = 32'b0;
+						6'h18:begin
+							{_HI_next, _LO_next} = {{32{EX_A_next[31]}}, EX_A_next} * {{32{EX_B_next[31]}}, EX_B_next};
+							if(HI_LO) HI_LO_overwrite_next = 1'b1;
+							HI_LO_next = 1'b1;
+						end
+						6'h19:begin
+							{_HI_next, _LO_next} = {{32{1'b0}}, EX_A_next} * {{32{1'b0}}, EX_B_next};
+							if(HI_LO) HI_LO_overwrite_next = 1'b1;
+							HI_LO_next = 1'b1;
+						end
+						6'h10:begin
+							HI_LO_next = 1'b0;
+							EX_ALUOUT_next = _HI;
+							EX_data_next = _HI;
+							EX_dataready_next = 1'b1;
+						end
+						6'h12:begin
+							HI_LO_next = 1'b0;
+							EX_ALUOUT_next = _LO;
+							EX_data_next = _LO;
+							EX_dataready_next = 1'b1;
 						end
 						default:begin
 							ALU(ID_ins, ID_A, ID_B, EX_ALUOUT_next, EX_dataready_next);
@@ -275,6 +311,7 @@ module pipeline(clk, rst, IF_ins, ID_ins, EX_ins, DM_ins, WB_ins, HI, LO, PC, Rd
 				end
 				6'h08, 6'h09, 6'h2b, 6'h29, 6'h28, 6'h0f, 6'h0c, 6'h0d, 6'h0e, 6'h0a:begin
 					ALU(ID_ins, ID_A, ID_B, EX_ALUOUT_next, EX_dataready_next);
+					EX_data_next = EX_ALUOUT_next;
 				end
 			endcase
 		end
@@ -345,20 +382,35 @@ module pipeline(clk, rst, IF_ins, ID_ins, EX_ins, DM_ins, WB_ins, HI, LO, PC, Rd
 	end
 	always@(*)begin
 		WB_ins_next = DM_ins;
-		WB_print_reg_next = 34'b0;
+		WB_print_reg_next[31:0] = 32'b0;
 		WB_write_next = DM_write;
 		WB_dataready_next = DM_dataready;
 		WB_data_next = DM_data;
+		write_0_next = 1'b0;
 		case(DM_ins[31:26])
 			6'h00:begin
 				case(DM_ins[5:0])
-					6'h18, 6'h19, 6'h08, 6'h10, 6'h12:begin
+					6'h18, 6'h19, 6'h08:begin
 						RWen_next = 1'b0;
 						RWAddr_next = 5'b0;
 						RWdata_next = 32'b0;
 						WB_print_reg_next = 34'b0;
 					end
+					6'h00:begin
+						if({DM_ins[31:26], DM_ins[20:0]}!=0)begin
+							if(DM_ins[15:11]==0)begin
+								write_0_next = 1'b1;
+							end
+						end
+						RWen_next = 1'b1;
+						RWAddr_next = DM_ins[15:11];
+						RWdata_next = DM_ALUOUT;
+						WB_print_reg_next[DM_ins[15:11]] = 1'b1;		
+					end
 					default:begin
+						if(DM_ins[15:11]==0)begin
+							write_0_next = 1'b1;
+						end
 						RWen_next = 1'b1;
 						RWAddr_next = DM_ins[15:11];
 						RWdata_next = DM_ALUOUT;
@@ -367,6 +419,9 @@ module pipeline(clk, rst, IF_ins, ID_ins, EX_ins, DM_ins, WB_ins, HI, LO, PC, Rd
 				endcase
 			end
 			6'h08, 6'h09, 6'h0f, 6'h0c, 6'h0d, 6'h0e, 6'h0a:begin
+				if(DM_ins[20:16]==0)begin
+					write_0_next = 1'b1;
+				end
 				RWen_next = 1'b1;
 				RWAddr_next = DM_ins[20:16];
 				RWdata_next = DM_ALUOUT;
@@ -379,6 +434,9 @@ module pipeline(clk, rst, IF_ins, ID_ins, EX_ins, DM_ins, WB_ins, HI, LO, PC, Rd
 				WB_print_reg_next[5'b11111] = 1'b1;
 			end
 			6'h23, 6'h21, 6'h25, 6'h20, 6'h24:begin
+				if(DM_ins[20:16]==0)begin
+					write_0_next = 1'b1;
+				end
 				RWen_next = 1'b1;
 				RWAddr_next = DM_ins[20:16];
 				RWdata_next = DM_MDR;
@@ -443,8 +501,13 @@ module pipeline(clk, rst, IF_ins, ID_ins, EX_ins, DM_ins, WB_ins, HI, LO, PC, Rd
 						dataReady = 1'b1;
 					end
 					6'h00:begin
-						ALUOut = B << ins[10:6];
-						dataReady = 1'b1;
+						if({|{ins[31:26],ins[20:0]}})begin
+							ALUOut = B << ins[10:6];
+							dataReady = 1'b1;
+						end else begin
+							ALUOut = 32'b0;
+							dataReady = 1'b0;
+						end
 					end
 					6'h02:begin
 						ALUOut = B >> ins[10:6];
@@ -501,7 +564,7 @@ module pipeline(clk, rst, IF_ins, ID_ins, EX_ins, DM_ins, WB_ins, HI, LO, PC, Rd
 		output reg stall;
 		output reg is_A, is_B;
 		output reg [31:0] _A, _B;
-		output reg _rs, _rt, ED_to_ID;
+		output reg _rs, _rt;
 		output reg [4:0] ED_to_ID_reg;
 
 		reg needA, needB;	
@@ -515,12 +578,11 @@ module pipeline(clk, rst, IF_ins, ID_ins, EX_ins, DM_ins, WB_ins, HI, LO, PC, Rd
 		is_B = 1'b0;
 		_rs = 1'b0;
 		_rt = 1'b0;
-		ED_to_ID = 1'b0;
 		ED_to_ID_reg = 5'b0;
 		case(ins[31:26])
 			6'h00:begin
 				case(ins[5:0])
-					6'h20, 6'h21, 6'h22, 6'h24, 6'h25, 6'h26, 6'h27, 6'h28, 6'h2a:begin
+					6'h20, 6'h21, 6'h22, 6'h24, 6'h25, 6'h26, 6'h27, 6'h28, 6'h2a, 6'h18, 6'h19:begin
 						needA = 1'b1;
 						needB = 1'b1;
 					end
@@ -553,98 +615,237 @@ module pipeline(clk, rst, IF_ins, ID_ins, EX_ins, DM_ins, WB_ins, HI, LO, PC, Rd
 				needB = 1'b0;
 			end
 		endcase
-		if(needA)begin
-			case(ins[25:21])
-				EX_write:begin
-					if(EX_dataready)begin
-						stallA = 1'b0;
-						is_A = 1'b1;
-						_A = EX_data;
-						_rs = 1'b1;
-						ED_to_ID = 1'b1;
-						ED_to_ID_reg = EX_write;
-					end else begin
-						stallA = 1'b1;
-						is_A = 1'b0;
-						_A = 32'b0;
-					end
+		if(needA & ins[25:21]!=0)begin
+			case(ins[31:26])
+				6'h04,6'h05,6'h07:begin
+					case(ins[25:21])
+						DM_write:begin
+							if(DM_dataready)begin
+								stallA = 1'b0;
+								is_A = 1'b1;
+								_A = DM_data;
+							end else begin
+								stallA = 1'b1;
+								is_A = 1'b0;
+								_A = 32'b0;
+							end
+						end
+						EX_write:begin
+							if(EX_dataready)begin
+								stallA = 1'b0;
+								is_A = 1'b1;
+								_A = EX_data;
+								_rs = 1'b1;
+								ED_to_ID_reg = EX_write;
+							end else begin
+								stallA = 1'b1;
+								is_A = 1'b0;
+								_A = 32'b0;
+							end
+						end
+						ID_write:begin
+							stallA = 1'b1;
+							is_A = 1'b0;
+							_A = 32'b0;
+						end
+						WB_write:begin
+							if(WB_dataready)begin
+								stalled = 1'b0;
+								is_A = 1'b1;
+								_A = WB_data;
+							end
+						end
+						default:begin
+							stallA = 1'b0;
+							is_A = 1'b0;
+							_A = 32'b0;
+						end
+					endcase
 				end
-				DM_write:begin
-					if(DM_dataready)begin
-						stallA = 1'b0;
-						is_A = 1'b1;
-						_A = DM_data;
-					end else begin
-						stallA = 1'b1;
-						is_A = 1'b0;
-						_A = 32'b0;
-					end
-				end
-/*				WB_write:begin
-					if(WB_dataready)begin
-						stallA = 1'b0;
-						is_A = 1'b1;
-						_A = WB_data;
-					end else begin
-						stallA = 1'b1;
-						is_A = 1'b0;
-						_A = 32'b0;
-					end
-				end*/
 				default:begin
-					stallA = 1'b0;
-					is_A = 1'b0;
-					_A = 32'b0;
+					if(ins[25:21]==ID_write && !EX_dataready_next)begin
+						stallA = 1'b1;
+						is_A = 1'b0;
+						_A = 32'b0;
+					end else begin
+						stallA = 1'b0;
+						is_A = 1'b0;
+						_A = 32'b0;
+					end
 				end
 			endcase
 		end
-		if(needB & (|ins[20:16]))begin
-			case(ins[20:16])
-				EX_write:begin
-					if(EX_dataready)begin
-						stallB = 1'b0;
-						is_B = 1'b1;
-						_B = EX_data;
-						_rt = 1'b1;
-						ED_to_ID = 1'b1;
-						ED_to_ID_reg = EX_write;
-					end else begin
-						stallB = 1'b1;
-						is_B = 1'b0;
-						_B = 32'b0;
-					end
+		if(needB & ins[20:16]!=0)begin
+			case(ins[31:26])
+				6'h04, 6'h05, 6'h07:begin
+					case(ins[20:16])
+						DM_write:begin
+							if(DM_dataready)begin
+								stallB = 1'b0;
+								is_B = 1'b1;
+								_B = DM_data;
+							end else begin
+								stallB = 1'b1;
+								is_B = 1'b0;
+								_B = 32'b0;
+							end
+						end
+						EX_write:begin
+							if(EX_dataready)begin
+								stallB = 1'b0;
+								is_B = 1'b1;
+								_B = EX_data;
+								_rt = 1'b1;
+								ED_to_ID_reg = EX_write;
+							end else begin
+								stallB = 1'b1;
+								is_B = 1'b0;
+								_B = 32'b0;
+							end
+						end
+						ID_write:begin
+							stallB = 1'b1;
+							is_B = 1'b0;
+							_B = 32'b0;
+						end
+						WB_write:begin
+							if(WB_dataready)begin
+								stalled = 1'b0;
+								is_B = 1'b1;
+								_B = WB_data;
+							end
+						end
+						default:begin
+							stallB = 1'b0;
+							is_B = 1'b0;
+							_B = 32'b0;
+						end
+					endcase
 				end
-				DM_write:begin
-					if(DM_dataready)begin
-						stallB = 1'b0;
-						is_B = 1'b1;
-						_B = DM_data;
-					end else begin
-						stallB = 1'b1;
-						is_B = 1'b0;
-						_B = 32'b0;
-					end
-				end
-/*				WB_write:begin
-					if(WB_dataready)begin
-						stallB = 1'b0;
-						is_B = 1'b1;
-						_B = WB_data;
-					end else begin
-						stallB = 1'b1;
-						is_B = 1'b0;
-						_B = 32'b0;
-					end
-				end*/
 				default:begin
-					stallB = 1'b0;
-					is_B = 1'b0;
-					_B = 32'b0;
+					if(ins[20:16]==ID_write && !EX_dataready_next)begin
+						stallB = 1'b1;
+						is_B = 1'b0;
+						_B = 32'b0;
+					end else begin
+						stallB = 1'b0;
+						is_B = 1'b0;
+						_B = 32'b0;
+					end
 				end
 			endcase
 		end
 		stall = stallA | stallB;
-	end
+		end
+	endtask
+
+	task fwd;
+		input [31:0] ins;
+		output reg is_A, is_B;
+		output reg [31:0] _A, _B;
+		output reg _rs, _rt;
+		output reg rs_, rt_;
+		output reg [4:0] ED_to_EX_reg;
+		output reg [4:0] DW_to_EX_reg;
+
+		reg needA, needB;
+
+		begin
+		needA = 1'b0;
+		needB = 1'b0;
+		is_A = 1'b0;
+		is_B = 1'b0;
+		_A = 32'b0;
+		_B = 32'b0;
+		_rs = 1'b0;
+		_rt = 1'b0;
+		rs_ = 1'b0;
+		rt_ = 1'b0;
+		ED_to_EX_reg = 5'b0;
+		DW_to_EX_reg = 5'b0;
+		case(ins[31:26])
+			6'h00:begin
+				case(ins[5:0])
+					6'h08:begin
+						needA = 1'b0;
+						needB = 1'b0;
+					end
+					6'h00, 6'h02, 6'h03:begin
+						needA = 1'b0;
+						needB = 1'b1;
+					end
+					default:begin
+						needA = 1'b1;
+						needB = 1'b1;
+					end
+				endcase
+			end
+			6'h2b, 6'h29, 6'h28:begin
+				needA = 1'b1;
+				needB = 1'b1;
+			end
+			6'h08, 6'h09, 6'h23, 6'h21, 6'h25, 6'h20, 6'h24, 6'h0c, 6'h0d, 6'h0e, 6'h0a:begin
+				needA = 1'b1;
+				needB = 1'b0;
+			end
+			default:begin
+				needA = 1'b0;
+				needB = 1'b0;
+			end
+		endcase
+		if(needA && ins[25:21]!=0)begin
+			case(ins[25:21])
+				EX_write:begin
+					if(EX_dataready)begin
+						is_A = 1'b1;
+						_A = EX_data;
+						_rs = 1'b1;
+						ED_to_EX_reg = EX_write;
+					end
+				end
+				DM_write:begin
+					if(DM_dataready)begin
+						is_A = 1'b1;
+						_A = DM_data;
+						rs_ = 1'b1;
+						DW_to_EX_reg = DM_write;
+					end
+				end
+				WB_write:begin
+					if(WB_dataready)begin
+						is_A = 1'b1;
+						_A = WB_data;
+					end
+				end
+			endcase
+		end
+		if(needB & ins[20:16]!=0)begin
+			case(ins[20:16])
+				EX_write:begin
+					if(EX_dataready)begin
+						is_B = 1'b1;
+						_B = EX_data;
+						_rt = 1'b1;
+						ED_to_EX_reg = EX_write;
+					end
+				end
+				DM_write:begin
+					if(DM_dataready)begin
+						is_B = 1'b1;
+						_B = DM_data;
+						rt_ = 1'b1;
+						DW_to_EX_reg = DM_write;
+					end
+				end
+				WB_write:begin
+					if(WB_dataready)begin
+						is_B = 1'b1;
+						_B = WB_data;
+					end
+				end
+			endcase
+		end
+		end
 	endtask
 
 endmodule

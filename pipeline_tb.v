@@ -1,6 +1,7 @@
 `define IDISK "./iimage.bin"
 `define DDISK "./dimage.bin"
 `define CYC 30
+`define ENDCYCLE 50000000
 
 module tb;
 
@@ -31,10 +32,11 @@ module tb;
 	reg clk, rst;
 	reg [19:0]cycle;
 
-	wire stalled, flush;
-	wire rs, rt;
-	wire EX_DM_to_ID;
+	wire stalled, flush, write_0, HI_LO_overwrite;
+	wire [2:0]rs, rt;
 	wire [4:0] EX_DM_to_ID_reg;
+	wire [4:0] EX_DM_to_EX_reg;
+	wire [4:0] DM_WB_to_EX_reg;
 
 	pipeline pl(
 		.clk(clk),
@@ -70,8 +72,11 @@ module tb;
 		.flush(flush),
 		.rs(rs),
 		.rt(rt),
-		.EX_DM_to_ID(EX_DM_to_ID),
-		.EX_DM_to_ID_reg(EX_DM_to_ID_reg));
+		.EX_DM_to_ID_reg(EX_DM_to_ID_reg),
+		.EX_DM_to_EX_reg(EX_DM_to_EX_reg),
+		.DM_WB_to_EX_reg(DM_WB_to_EX_reg),
+		.write_0(write_0),
+		.HI_LO_overwrite(HI_LO_overwrite));
 
 	always #(`CYC/2) clk = ~clk;
 
@@ -89,7 +94,6 @@ module tb;
 
 	always@(negedge clk)begin
 		Rdata_i <= i_disk[register[34]>>2];
-		$fwrite(errorfile, "%h, %h\n",register[34], Rdata_i);
 	end
 
 	always@(negedge clk)begin
@@ -102,9 +106,35 @@ module tb;
 		prev_dif <= dif;
 	end
 
+	reg print_HI, print_LO;
+
+	always@(negedge clk)begin
+		if(register[32]!=_HI)begin
+			print_HI <= 1'b1;
+			register[32] <= _HI;
+		end else begin
+			print_HI <= 1'b0;
+		end
+		if(register[33]!=_LO)begin
+			print_LO <= 1'b1;
+			register[33] <= _LO;
+		end else begin
+			print_LO <= 1'b0;
+		end
+	end	
+
+	always@(posedge clk)begin
+		if(write_0)begin
+			$fwrite(errorfile, "In cycle %0d: Write $0 error\n", cycle);
+		end
+		if(HI_LO_overwrite)begin
+			$fwrite(errorfile, "In cycle %0d: Overwrite HI-LO registers\n", cycle);
+		end
+	end
+
 	always@(negedge clk)begin
 		dif <= 1'b0;
-		if(RWen)begin
+		if(RWen && RWAddr!=0)begin
 			if(register[RWAddr]!=RWdata)begin
 				dif <= 1'b1;
 				register[RWAddr] <= RWdata;
@@ -112,10 +142,9 @@ module tb;
 				dif <= 1'b0;
 			end
 		end
-		A <= register[RA];
-		B <= register[RB];
-		$fwrite(errorfile, "%h, %h\n", RA, A);
-		$fwrite(errorfile, "%h, %h\n", RB, B);	
+		#5;
+		A = register[RA];
+		B = register[RB];
 	end
 
 	initial begin
@@ -198,26 +227,34 @@ module tb;
 					$fwrite(snapfile, "$%02d: 0x%08h\n", i, register[i]);
 				i = i + 1;
 			end
-			if(print_reg[32])
+			if(print_HI)
 				$fwrite(snapfile, "$HI: 0x%08h\n", register[32]);
-			if(print_reg[33])
+			if(print_LO)
 				$fwrite(snapfile, "$LO: 0x%08h\n", register[33]);
 			$fwrite(snapfile, "PC: 0x%08h\n", pc);
 			$fwrite(snapfile, "IF: 0x%08h", IF_ins);
 			if(stalled)
 				$fwrite(snapfile, " to_be_stalled");
+			if(flush)
+				$fwrite(snapfile, " to_be_flushed");
 			$fwrite(snapfile, "\nID: ");
 			print_ins(ID_ins[31:26], ID_ins[5:0], ~((&ID_ins[31:26]) & (&ID_ins[20:0])));
 			if(stalled)
 				$fwrite(snapfile, " to_be_stalled");
-			if(EX_DM_to_ID)
-				$fwrite(snapfile, " fwd_EX-DM_r");
-			if(rs)
-				$fwrite(snapfile, "s_$%0d", EX_DM_to_ID_reg);
-			if(rt)
-				$fwrite(snapfile, "t_$%0d", EX_DM_to_ID_reg);
+			if(rs[0])
+				$fwrite(snapfile, " fwd_EX-DM_rs_$%0d", EX_DM_to_ID_reg);
+			if(rt[0])
+				$fwrite(snapfile, " fwd_EX-DM_rt_$%0d", EX_DM_to_ID_reg);
 			$fwrite(snapfile, "\nEX: ");
 			print_ins(EX_ins[31:26], EX_ins[5:0], ~((&EX_ins[31:26]) & (&EX_ins[20:0])));
+			if(rs[1])
+				$fwrite(snapfile, " fwd_EX-DM_rs_$%0d", EX_DM_to_EX_reg);
+			if(rs[2])
+				$fwrite(snapfile, " fwd_DM-WB_rs_$%0d", DM_WB_to_EX_reg);
+			if(rt[1])
+				$fwrite(snapfile, " fwd_EX-DM_rt_$%0d", EX_DM_to_EX_reg);
+			if(rt[2])
+				$fwrite(snapfile, " fwd_DM-WB_rt_$%0d", DM_WB_to_EX_reg);
 			$fwrite(snapfile, "\nDM: ");
 			print_ins(DM_ins[31:26], DM_ins[5:0], ~((&DM_ins[31:26]) & (&DM_ins[20:0])));
 			$fwrite(snapfile, "\nWB: ");
@@ -229,6 +266,11 @@ module tb;
 	end
 
 	always@(posedge Finish)begin
+		$finish;
+	end
+	
+	initial begin
+		#`ENDCYCLE;
 		$finish;
 	end
 
